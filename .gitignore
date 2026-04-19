@@ -1,0 +1,6 @@
+frontend/node_modules/
+frontend/dist/
+backend/node_modules/
+backend/.venv/
+# 若曾把依赖装在仓库根目录，可忽略：
+node_modules/
