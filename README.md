@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 智能家居项目
 
 本目录为单仓库根目录，前后端分文件夹放置：
@@ -50,3 +51,7 @@ python app.py
 ## 说明
 
 - 若根目录仍残留旧的 `node_modules`，请先关闭占用该目录的进程（如正在运行的 `npm run dev`），再删除根目录下的 `node_modules`；依赖请分别在 `frontend` 与 `backend` 下安装。
+=======
+# smart-home-voice-control
+毕业设计：基于大模型的语音控制智能家居系统
+>>>>>>> 17d79a3dbe510fd036043c021ff54e10c7ec3559
