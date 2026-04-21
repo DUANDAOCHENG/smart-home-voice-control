@@ -1,13 +1,110 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 type ProjectId = 'voice' | 'furniture' | 'simulation'
+type ChatRole = 'user' | 'assistant'
+type ChatMessage = { role: ChatRole; content: string }
 
 const projects: { id: ProjectId; label: string }[] = [
   { id: 'voice', label: '语音控制' },
   { id: 'furniture', label: '智能家具管理' },
   { id: 'simulation', label: '智能家具模拟' },
 ]
+/** 大灯开关：1 开，0 关（静态模拟，后续可换成真实接口） */
+type LampPower = 0 | 1
 
+function VoiceControl({
+  onCommand,
+  onConversation,
+}: {
+  onCommand: (power: LampPower) => void
+  onConversation: (messages: ChatMessage[]) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+
+  const start = async () => {
+    if (loading || recorderRef.current) return
+    setLoading(true)
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const recorder = new MediaRecorder(stream)
+    streamRef.current = stream
+    recorderRef.current = recorder
+    chunksRef.current = []
+    recorder.ondataavailable = (a) => chunksRef.current.push(a.data)
+
+    recorder.onstop = async () => {
+      try {
+        const blob = new Blob(chunksRef.current, { type: 'audio/wav' })
+        const FD = new FormData()
+        FD.append('ddc', blob, 'audio.wav')
+        const response = await fetch('/api/voice-control', {
+          method: 'POST',
+          body: FD,
+        })
+
+        if (!response.ok) {
+          let detail = ''
+          try {
+            const errData = await response.json()
+            detail = errData?.error ? ` - ${errData.error}` : ''
+          } catch {
+            detail = ''
+          }
+          throw new Error(`请求失败：${response.status}${detail}`)
+        }
+
+        const data = await response.json()
+        if (data.action === 'on') {
+          onCommand(1)
+        } else if (data.action === 'off') {
+          onCommand(0)
+        }
+        onConversation([
+          { role: 'user', content: data.transcript ?? '（未识别到文本）' },
+          { role: 'assistant', content: data.model_response ?? JSON.stringify(data) },
+        ])
+      } catch (error) {
+        console.error('语音控制请求失败', error)
+      } finally {
+        streamRef.current?.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+        recorderRef.current = null
+        chunksRef.current = []
+        setLoading(false)
+      }
+    }
+    recorder.start()
+  }
+
+  const stop = () => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop()
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="rounded-md border-2 border-red-500 p-2"
+        onClick={start}
+        disabled={loading}
+      >
+        {loading ? '录音中...' : '开始录音'}
+      </button>
+      <button
+        type="button"
+        className="rounded-md border border-slate-400 bg-white p-2 text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={stop}
+        disabled={!loading}
+      >
+        停止录音
+      </button>
+    </div>
+  )
+}
 function SmartHomeLogo() {
   return (
     <div className="flex items-center gap-2 pb-4 border-b border-slate-200">
@@ -43,7 +140,13 @@ function SmartHomeLogo() {
   )
 }
 
-function VoiceControlPanel() {
+function VoiceControlPanel({ onCommand }: { onCommand: (power: LampPower) => void }) {
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+
+  const handleConversation = (messages: ChatMessage[]) => {
+    setChatMessages((prev) => [...prev, ...messages])
+  }
+
   return (
     <div className="space-y-3">
       <h1 className="text-xl font-semibold text-slate-900">语音控制</h1>
@@ -54,6 +157,29 @@ function VoiceControlPanel() {
         <li>说出唤醒词后下达指令</li>
         <li>支持开关灯、调节温度等场景</li>
       </ul>
+      <VoiceControl onCommand={onCommand} onConversation={handleConversation} />
+      <div className="mt-4 space-y-2 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-700">对话记录</h2>
+        {chatMessages.length === 0 ? (
+          <p className="text-sm text-slate-500">暂无对话，录音后会显示在这里。</p>
+        ) : (
+          <div className="space-y-2">
+            {chatMessages.map((msg, idx) => (
+              <div
+                key={`${msg.role}-${idx}`}
+                className={`rounded-md px-3 py-2 text-sm ${
+                  msg.role === 'user'
+                    ? 'bg-blue-50 text-blue-900'
+                    : 'bg-emerald-50 text-emerald-900'
+                }`}
+              >
+                <span className="mr-2 font-medium">{msg.role === 'user' ? '我' : '模型'}</span>
+                <span>{msg.content}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -72,18 +198,19 @@ function SmartFurniturePanel() {
   )
 }
 
-/** 大灯开关：1 开，0 关（静态模拟，后续可换成真实接口） */
-type LampPower = 0 | 1
-
-function FurnitureSimulationPanel() {
-  const [mainLampPower, setMainLampPower] = useState<LampPower>(0)
-
+function FurnitureSimulationPanel({
+  wsd,
+  setWsd,
+}: {
+  wsd: LampPower
+  setWsd: (power: LampPower) => void
+}) {
   /** 传入 0 / 1 控制大灯（静态：只改本地状态） */
   function applyMainLamp(power: LampPower) {
-    setMainLampPower(power)
+    setWsd(power)
   }
 
-  const isOn = mainLampPower === 1
+  const isOn = wsd
 
   return (
     <div className="space-y-6">
@@ -106,7 +233,7 @@ function FurnitureSimulationPanel() {
           <div>
             <p className="text-sm font-medium text-slate-800">客厅 · 大灯</p>
             <p className="text-xs text-slate-500">
-              当前指令值：<span className="font-mono text-slate-800">{mainLampPower}</span>（
+              当前指令值：<span className="font-mono text-slate-800">{wsd}</span>（
               {isOn ? '开' : '关'}）
             </p>
           </div>
@@ -161,6 +288,7 @@ function FurnitureSimulationPanel() {
 
 export default function App() {
   const [active, setActive] = useState<ProjectId>('voice')
+  const [wsd, setWsd] = useState<LampPower>(0)
 
   return (
     <div className="min-h-screen flex bg-slate-50">
@@ -191,9 +319,9 @@ export default function App() {
       </aside>
 
       <main className="flex-1 p-8">
-        {active === 'voice' && <VoiceControlPanel />}
+        {active === 'voice' && <VoiceControlPanel onCommand={setWsd} />}
         {active === 'furniture' && <SmartFurniturePanel />}
-        {active === 'simulation' && <FurnitureSimulationPanel />}
+        {active === 'simulation' && <FurnitureSimulationPanel wsd={wsd} setWsd={setWsd} />}
       </main>
     </div>
   )
