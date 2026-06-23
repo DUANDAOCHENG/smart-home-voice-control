@@ -1,22 +1,37 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 type ProjectId = 'voice' | 'furniture' | 'simulation'
 type ChatRole = 'user' | 'assistant'
 type ChatMessage = { role: ChatRole; content: string }
+type SwitchPower = 0 | 1
+type CurtainState = 'open' | 'closed'
+type DeviceKey = 'light' | 'fan' | 'curtain' | 'tv'
+type VoiceAction = 'on' | 'off'
+type VoiceCommand = { device: DeviceKey; action: VoiceAction }
+type DeviceControlCommand = { device: DeviceKey; action: VoiceAction }
+type HomeState = {
+  light: SwitchPower
+  fan: SwitchPower
+  curtain: CurtainState
+  tv: SwitchPower
+}
+type DeviceStateRow = {
+  家具?: string
+  打开状态?: number
+  对应数值?: number
+}
+const POLL_INTERVAL_MS = 1000
 
 const projects: { id: ProjectId; label: string }[] = [
   { id: 'voice', label: '语音控制' },
   { id: 'furniture', label: '智能家具管理' },
   { id: 'simulation', label: '智能家具模拟' },
 ]
-/** 大灯开关：1 开，0 关（静态模拟，后续可换成真实接口） */
-type LampPower = 0 | 1
-
 function VoiceControl({
   onCommand,
   onConversation,
 }: {
-  onCommand: (power: LampPower) => void
+  onCommand: (command: VoiceCommand) => void
   onConversation: (messages: ChatMessage[]) => void
 }) {
   const [loading, setLoading] = useState(false)
@@ -56,10 +71,15 @@ function VoiceControl({
         }
 
         const data = await response.json()
-        if (data.action === 'on') {
-          onCommand(1)
-        } else if (data.action === 'off') {
-          onCommand(0)
+        const isValidDevice =
+          data.device === 'light' ||
+          data.device === 'fan' ||
+          data.device === 'curtain' ||
+          data.device === 'tv'
+        const isValidAction = data.action === 'on' || data.action === 'off'
+
+        if (isValidDevice && isValidAction) {
+          onCommand({ device: data.device, action: data.action })
         }
         onConversation([
           { role: 'user', content: data.transcript ?? '（未识别到文本）' },
@@ -140,7 +160,7 @@ function SmartHomeLogo() {
   )
 }
 
-function VoiceControlPanel({ onCommand }: { onCommand: (power: LampPower) => void }) {
+function VoiceControlPanel({ onCommand }: { onCommand: (command: VoiceCommand) => void }) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
 
   const handleConversation = (messages: ChatMessage[]) => {
@@ -184,102 +204,152 @@ function VoiceControlPanel({ onCommand }: { onCommand: (power: LampPower) => voi
   )
 }
 
-function SmartFurniturePanel() {
+function SmartFurniturePanel({ homeState }: { homeState: HomeState }) {
+  const lampLabel = homeState.light ? '开' : '关'
+  const fanLabel = homeState.fan ? '开' : '关'
+  const curtainLabel = homeState.curtain === 'open' ? '打开' : '关闭'
+  const tvLabel = homeState.tv ? '开' : '关'
+
   return (
     <div className="space-y-3">
       <h1 className="text-xl font-semibold text-slate-900">智能家具管理</h1>
       <p className="text-slate-600">
-        这里可放置家具设备列表、房间分组与状态（示例页面）。
+        这里展示语音控制后的家具状态（示例页面）。
       </p>
-      <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
-        示例：客厅灯 · 在线；空调 · 26℃
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
+          客厅灯：{lampLabel}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
+          风扇：{fanLabel}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
+          窗帘：{curtainLabel}
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
+          电视：{tvLabel}
+        </div>
       </div>
     </div>
   )
 }
 
 function FurnitureSimulationPanel({
-  wsd,
-  setWsd,
+  homeState,
+  onDeviceControl,
 }: {
-  wsd: LampPower
-  setWsd: (power: LampPower) => void
+  homeState: HomeState
+  onDeviceControl: (command: DeviceControlCommand) => Promise<void>
 }) {
-  /** 传入 0 / 1 控制大灯（静态：只改本地状态） */
-  function applyMainLamp(power: LampPower) {
-    setWsd(power)
+  function applySwitch(device: 'light' | 'fan' | 'tv', power: SwitchPower) {
+    void onDeviceControl({ device, action: power === 1 ? 'on' : 'off' })
   }
 
-  const isOn = wsd
+  function applyCurtain(state: CurtainState) {
+    void onDeviceControl({ device: 'curtain', action: state === 'open' ? 'on' : 'off' })
+  }
+
+  const devices: {
+    key: 'light' | 'fan' | 'tv'
+    label: string
+    state: SwitchPower
+  }[] = [
+    { key: 'light', label: '客厅 · 大灯', state: homeState.light },
+    { key: 'fan', label: '客厅 · 风扇', state: homeState.fan },
+    { key: 'tv', label: '客厅 · 电视', state: homeState.tv },
+  ]
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-slate-900">智能家具模拟</h1>
         <p className="mt-1 text-slate-600">
-          静态演示：通过数值 <code className="rounded bg-slate-100 px-1">0</code> /{' '}
-          <code className="rounded bg-slate-100 px-1">1</code> 控制客厅大灯开关。
+          静态演示：灯光、风扇、电视支持开关，窗帘支持打开/关闭，均可被语音控制。
         </p>
       </div>
 
-      <div
-        className={`rounded-xl border p-6 transition-colors ${
-          isOn
-            ? 'border-amber-200 bg-amber-50/80 shadow-[0_0_40px_rgba(251,191,36,0.35)]'
-            : 'border-slate-200 bg-slate-100/80'
-        }`}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        {devices.map((device) => {
+          const isOn = device.state === 1
+          return (
+            <div
+              key={device.key}
+              className={`rounded-xl border p-5 transition-colors ${
+                isOn
+                  ? 'border-amber-200 bg-amber-50/80 shadow-[0_0_28px_rgba(251,191,36,0.25)]'
+                  : 'border-slate-200 bg-slate-100/80'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-800">{device.label}</p>
+                  <p className="text-xs text-slate-500">
+                    当前指令值：<span className="font-mono text-slate-800">{device.state}</span>（
+                    {isOn ? '开' : '关'}）
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applySwitch(device.key, 1)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      isOn
+                        ? 'bg-amber-400 text-amber-950'
+                        : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    开 (1)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applySwitch(device.key, 0)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      !isOn
+                        ? 'bg-slate-600 text-white'
+                        : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    关 (0)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-medium text-slate-800">客厅 · 大灯</p>
+            <p className="text-sm font-medium text-slate-800">客厅 · 窗帘</p>
             <p className="text-xs text-slate-500">
-              当前指令值：<span className="font-mono text-slate-800">{wsd}</span>（
-              {isOn ? '开' : '关'}）
+              当前状态：{homeState.curtain === 'open' ? '打开' : '关闭'}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">模拟控制：</span>
             <button
               type="button"
-              onClick={() => applyMainLamp(1)}
+              onClick={() => applyCurtain('open')}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                isOn
-                  ? 'bg-amber-400 text-amber-950'
+                homeState.curtain === 'open'
+                  ? 'bg-emerald-500 text-white'
                   : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
               }`}
             >
-              开 (1)
+              打开 (on)
             </button>
             <button
               type="button"
-              onClick={() => applyMainLamp(0)}
+              onClick={() => applyCurtain('closed')}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                !isOn
-                  ? 'bg-slate-600 text-white'
+                homeState.curtain === 'closed'
+                  ? 'bg-slate-700 text-white'
                   : 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
               }`}
             >
-              关 (0)
+              关闭 (off)
             </button>
           </div>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <div
-            className={`flex size-14 items-center justify-center rounded-full transition-all ${
-              isOn
-                ? 'bg-amber-300 text-amber-950 shadow-[0_0_24px_rgba(252,211,77,0.9)]'
-                : 'bg-slate-300 text-slate-600'
-            }`}
-            aria-hidden
-          >
-            <svg className="size-8" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3a6 6 0 0 0-6 6c0 2.22 1.21 4.15 3 5.19V19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-4.81c1.79-1.04 3-2.97 3-5.19a6 6 0 0 0-6-6zm-1 17h2v1h-2v-1z" />
-            </svg>
-          </div>
-          <p className="text-sm text-slate-600">
-            {isOn ? '灯已点亮（静态效果）' : '灯已关闭'}
-          </p>
         </div>
       </div>
     </div>
@@ -288,7 +358,84 @@ function FurnitureSimulationPanel({
 
 export default function App() {
   const [active, setActive] = useState<ProjectId>('voice')
-  const [wsd, setWsd] = useState<LampPower>(0)
+  const [homeState, setHomeState] = useState<HomeState>({
+    light: 0,
+    fan: 0,
+    curtain: 'closed',
+    tv: 0,
+  })
+
+  const syncDeviceStates = useCallback(async () => {
+    try {
+      const response = await fetch('/api/device-states')
+      if (!response.ok) return
+      const payload = await response.json()
+      const rows: DeviceStateRow[] = Array.isArray(payload?.data) ? payload.data : []
+
+      setHomeState((prev) => {
+        const next = { ...prev }
+        for (const row of rows) {
+          const device = row?.家具
+          const status = row?.打开状态 === 1 ? 1 : 0
+          if (device === 'light') next.light = status
+          if (device === 'fan') next.fan = status
+          if (device === 'tv') next.tv = status
+          if (device === 'curtain') next.curtain = status === 1 ? 'open' : 'closed'
+        }
+        return next
+      })
+    } catch (error) {
+      console.error('拉取设备状态失败', error)
+    }
+  }, [])
+
+  const applyLocalCommand = useCallback((command: DeviceControlCommand) => {
+    setHomeState((prev) => {
+      if (command.device === 'curtain') {
+        return { ...prev, curtain: command.action === 'on' ? 'open' : 'closed' }
+      }
+      const power: SwitchPower = command.action === 'on' ? 1 : 0
+      return { ...prev, [command.device]: power }
+    })
+  }, [])
+
+  useEffect(() => {
+    syncDeviceStates()
+    const timer = window.setInterval(syncDeviceStates, POLL_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [syncDeviceStates])
+
+  const handleVoiceCommand = (command: VoiceCommand) => {
+    applyLocalCommand(command)
+    void syncDeviceStates()
+  }
+
+  const handleDeviceControl = useCallback(
+    async (command: DeviceControlCommand) => {
+      // 先本地更新，保证按钮点击后 UI 立即反馈
+      applyLocalCommand(command)
+      try {
+        const response = await fetch('/api/device-control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(command),
+        })
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}))
+          throw new Error(err?.error ?? `请求失败：${response.status}`)
+        }
+      } catch (error) {
+        console.error('设备控制请求失败', error)
+      } finally {
+        await syncDeviceStates()
+        // 某些场景下数据库写入有微小时延，追加一次短延迟同步
+        window.setTimeout(() => {
+          void syncDeviceStates()
+        }, 300)
+      }
+    },
+    [applyLocalCommand, syncDeviceStates],
+  )
 
   return (
     <div className="min-h-screen flex bg-slate-50">
@@ -319,9 +466,11 @@ export default function App() {
       </aside>
 
       <main className="flex-1 p-8">
-        {active === 'voice' && <VoiceControlPanel onCommand={setWsd} />}
-        {active === 'furniture' && <SmartFurniturePanel />}
-        {active === 'simulation' && <FurnitureSimulationPanel wsd={wsd} setWsd={setWsd} />}
+        {active === 'voice' && <VoiceControlPanel onCommand={handleVoiceCommand} />}
+        {active === 'furniture' && <SmartFurniturePanel homeState={homeState} />}
+        {active === 'simulation' && (
+          <FurnitureSimulationPanel homeState={homeState} onDeviceControl={handleDeviceControl} />
+        )}
       </main>
     </div>
   )
